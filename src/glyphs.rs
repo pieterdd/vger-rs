@@ -32,6 +32,7 @@ pub struct Image {
 pub struct GlyphCache {
     pub mask_atlas: Atlas,
     pub color_atlas: Atlas,
+    pub image_atlas: Atlas,
     pub font: fontdue::Font,
     info: HashMap<(char, u32), GlyphInfo>,
     atlas_infos: HashMap<
@@ -57,6 +58,7 @@ impl GlyphCache {
         Self {
             mask_atlas: Atlas::new(device, AtlasContent::Mask),
             color_atlas: Atlas::new(device, AtlasContent::Color),
+            image_atlas: Atlas::new(device, AtlasContent::Color),
             font: fontdue::Font::from_bytes(font, settings).unwrap(),
             info: HashMap::new(),
             atlas_infos: HashMap::new(),
@@ -192,10 +194,14 @@ impl GlyphCache {
     pub fn update(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
         self.mask_atlas.update(device, encoder);
         self.color_atlas.update(device, encoder);
+        self.image_atlas.update(device, encoder);
     }
 
     pub fn check_usage(&mut self) {
-        if self.mask_atlas.usage() > 0.7 || self.color_atlas.usage() > 0.7 {
+        if self.mask_atlas.usage() > 0.7
+            || self.color_atlas.usage() > 0.7
+            || self.image_atlas.usage() > 0.7
+        {
             self.clear();
         }
     }
@@ -204,6 +210,7 @@ impl GlyphCache {
         self.info.clear();
         self.mask_atlas.clear();
         self.color_atlas.clear();
+        self.image_atlas.clear();
         self.atlas_infos.clear();
     }
 }
