@@ -623,9 +623,9 @@ var color_atlas: texture_2d<f32>;
 @binding(3)
 var samp : sampler;
 
-@group(2)
-@binding(0)
-var tex : texture_2d<f32>;
+@group(1)
+@binding(4)
+var color_samp : sampler;
 
 // sRGB to linear conversion for one channel.
 fn toLinear(s: f32) -> f32
@@ -648,8 +648,9 @@ fn fs_main(
 
     // Look up glyph alpha (if not a glyph, still have to because of wgsl).
     // let a = textureSample(glyph_atlas, samp, (in.t+0.5)/1024.0).r;
-    let mask = textureLoad(glyph_atlas, vec2<i32>(in.t), 0);
-    let color_mask = textureLoad(color_atlas, vec2<i32>(in.t), 0);
+    // let mask = textureLoad(glyph_atlas, vec2<i32>(in.t), 0);
+    let mask = textureSample(glyph_atlas, samp, in.t/4096.0);
+    let color_mask = textureSample(color_atlas, color_samp, in.t/4096.0);
 
     // Look up image color (if no active image, still have to because of wgsl).
     // Note that we could use a separate shader if that's a perf hit.
@@ -667,7 +668,7 @@ fn fs_main(
 
         // XXX: using toLinear is a bit of a guess. Gets us closer
         // to matching the glyph atlas in the output.
-        var color = vec4<f32>(c.rgb, mask.r);
+        var color = vec4<f32>(c.rgb, c.a * mask.r);
 
         //if(glow) {
         //    color.a *= paint.glow;
