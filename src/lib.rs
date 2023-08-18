@@ -489,6 +489,7 @@ impl Vger {
         rect: Rect,
         radius: f32,
         paint_index: PaintIndex,
+        blur_radius: f32,
     ) {
         let mut prim = Prim::default();
         prim.prim_type = PrimType::Rect as u32;
@@ -499,9 +500,15 @@ impl Vger {
         prim.cvs[1] = min.y;
         prim.cvs[2] = max.x;
         prim.cvs[3] = max.y;
+        prim.cvs[4] = blur_radius;
         prim.radius = radius;
         prim.paint = paint_index.index as u32;
-        prim.quad_bounds = [min.x, min.y, max.x, max.y];
+        prim.quad_bounds = [
+            min.x - blur_radius * 3.0,
+            min.y - blur_radius * 3.0,
+            max.x + blur_radius * 3.0,
+            max.y + blur_radius * 3.0,
+        ];
         prim.tex_bounds = prim.quad_bounds;
         prim.scissor = self.add_scissor() as u32;
 

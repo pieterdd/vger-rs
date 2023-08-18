@@ -99,7 +99,7 @@ fn fill_rect() {
 
     vger.begin(512.0, 512.0, 1.0);
     let cyan = vger.color_paint(Color::CYAN);
-    vger.fill_rect(euclid::rect(100.0, 100.0, 100.0, 100.0), 10.0, cyan);
+    vger.fill_rect(euclid::rect(100.0, 100.0, 100.0, 100.0), 10.0, cyan, 0.0);
 
     render_test(&mut vger, &device, &queue, "rect.png", false);
 }
@@ -124,7 +124,7 @@ fn fill_rect_gradient() {
         0.0,
     );
 
-    vger.fill_rect(euclid::rect(100.0, 100.0, 100.0, 100.0), 10.0, paint);
+    vger.fill_rect(euclid::rect(100.0, 100.0, 100.0, 100.0), 10.0, paint, 0.0);
 
     render_test(&mut vger, &device, &queue, "rect_gradient.png", false);
 }
@@ -426,7 +426,7 @@ fn test_scissor() {
 
     vger.scissor(euclid::rect(200.0, 200.0, 100.0, 100.0));
     let cyan = vger.color_paint(Color::WHITE);
-    vger.fill_rect(euclid::rect(100.0, 100.0, 300.0, 300.0), 10.0, cyan);
+    vger.fill_rect(euclid::rect(100.0, 100.0, 300.0, 300.0), 10.0, cyan, 0.0);
 
     let png_name = "scissor.png";
     render_test(&mut vger, &device, &queue, png_name, true);
