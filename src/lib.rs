@@ -59,6 +59,8 @@ pub(crate) struct Scissor {
     pub xform: WorldToLocal,
     pub origin: [f32; 2],
     pub size: [f32; 2],
+    pub radius: f32,
+    pad: f32,
 }
 
 impl Scissor {
@@ -67,6 +69,8 @@ impl Scissor {
             xform: WorldToLocal::identity(),
             origin: [-10000.0, -10000.0],
             size: [20000.0, 20000.0],
+            radius: 0.0,
+            pad: 0.0,
         }
     }
 }
@@ -944,13 +948,14 @@ impl Vger {
     }
 
     /// Sets the current scissor rect.
-    pub fn scissor(&mut self, rect: LocalRect) {
+    pub fn scissor(&mut self, rect: LocalRect, radius: f32) {
         if let Some(m) = self.scissor_stack.last_mut() {
             *m = Scissor::new();
             if let Some(xform) = self.tx_stack.last().unwrap().inverse() {
                 m.xform = xform;
                 m.origin = rect.origin.to_array();
                 m.size = rect.size.to_array();
+                m.radius = radius;
             }
         }
     }
