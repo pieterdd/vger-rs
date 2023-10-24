@@ -44,7 +44,7 @@ pub struct GlyphCache {
         AtlasInfo,
     >,
     svg_infos: HashMap<Vec<u8>, HashMap<(u32, u32), AtlasInfo>>,
-    img_infos: HashMap<Vec<u8>, HashMap<(u32, u32), AtlasInfo>>,
+    img_infos: HashMap<Vec<u8>, AtlasInfo>,
 }
 
 impl GlyphCache {
@@ -65,23 +65,11 @@ impl GlyphCache {
         }
     }
 
-    pub fn get_image_mask(
-        &mut self,
-        hash: &[u8],
-        width: u32,
-        height: u32,
-        image_fn: impl FnOnce() -> Image,
-    ) -> AtlasInfo {
-        if !self.img_infos.contains_key(hash) {
-            self.img_infos.insert(hash.to_vec(), HashMap::new());
+    pub fn get_image_mask(&mut self, hash: &[u8], image_fn: impl FnOnce() -> Image) -> AtlasInfo {
+        if let Some(info) = self.img_infos.get(hash) {
+            return *info;
         }
 
-        {
-            let img_infos = self.img_infos.get(hash).unwrap();
-            if let Some(info) = img_infos.get(&(width, height)) {
-                return info.clone();
-            }
-        }
         let image = image_fn();
         let rect = self
             .color_atlas
@@ -92,9 +80,7 @@ impl GlyphCache {
             top: 0,
             colored: true,
         };
-
-        let img_info_map = self.img_infos.get_mut(hash).unwrap();
-        img_info_map.insert((width, height), info);
+        self.img_infos.insert(hash.to_vec(), info);
 
         info
     }
@@ -113,7 +99,7 @@ impl GlyphCache {
         {
             let svg_infos = self.svg_infos.get(hash).unwrap();
             if let Some(info) = svg_infos.get(&(width, height)) {
-                return info.clone();
+                return *info;
             }
         }
 
@@ -127,7 +113,7 @@ impl GlyphCache {
         };
 
         let svg_infos = self.svg_infos.get_mut(hash).unwrap();
-        svg_infos.insert((width, height), info.clone());
+        svg_infos.insert((width, height), info);
 
         info
     }

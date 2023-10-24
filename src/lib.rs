@@ -27,8 +27,8 @@ pub mod atlas;
 
 mod glyphs;
 
-pub use glyphs::{PixelFormat, Image};
 use glyphs::GlyphCache;
+pub use glyphs::{Image, PixelFormat};
 
 use wgpu::util::DeviceExt;
 
@@ -735,15 +735,14 @@ impl Vger {
         height: u32,
         image_fn: impl FnOnce() -> Image,
     ) {
-
-        let info = self.glyph_cache.get_image_mask(hash, width, height, image_fn);
+        let info = self.glyph_cache.get_image_mask(hash, image_fn);
         if let Some(rect) = info.rect {
             let mut prim = Prim::default();
             prim.prim_type = PrimType::ColorGlyph as u32;
 
             let x = x + info.left as f32;
             let y = y - info.top as f32;
-            prim.quad_bounds = [x, y, x + rect.width as f32, y + rect.height as f32];
+            prim.quad_bounds = [x, y, x + width as f32, y + height as f32];
 
             prim.tex_bounds = [
                 rect.x as f32,
