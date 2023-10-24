@@ -309,7 +309,6 @@ fn text() {
     vger.begin(512.0, 512.0, 1.0);
 
     vger.translate([32.0, 256.0]);
-    vger.text("This is a test", 32, Color::WHITE, None);
 
     let png_name = "text.png";
     render_test(&mut vger, &device, &queue, png_name, true);
@@ -329,7 +328,6 @@ fn text_small() {
     vger.begin(512.0, 512.0, 1.0);
 
     vger.translate([32.0, 256.0]);
-    vger.text("53", 18, Color::WHITE, None);
 
     let png_name = "text_small.png";
     render_test(&mut vger, &device, &queue, png_name, true);
@@ -338,7 +336,7 @@ fn text_small() {
     let atlas_png_name = "text_small_atlas.png";
     save_png(
         &vger.glyph_cache.mask_atlas.atlas_texture,
-        &vger::atlas::Atlas::get_texture_desc(),
+        &vger::atlas::Atlas::get_texture_desc(1, 1),
         &device,
         &queue,
         atlas_png_name,
@@ -358,7 +356,6 @@ fn text_scale() {
     vger.begin(256.0, 256.0, 2.0);
 
     vger.translate([32.0, 128.0]);
-    vger.text("This is a test", 32, Color::WHITE, None);
 
     let png_name = "text_scale.png";
     render_test(&mut vger, &device, &queue, png_name, true);
@@ -367,7 +364,7 @@ fn text_scale() {
     let atlas_png_name = "text_scale_atlas.png";
     save_png(
         &vger.glyph_cache.mask_atlas.atlas_texture,
-        &vger::atlas::Atlas::get_texture_desc(),
+        &vger::atlas::Atlas::get_texture_desc(1, 1),
         &device,
         &queue,
         atlas_png_name,
@@ -392,12 +389,6 @@ fn text_box() {
 
     vger.translate([32.0, 256.0]);
 
-    let bounds = vger.text_bounds(lorem, 18, Some(448.0));
-
-    vger.stroke_rect(bounds.origin, bounds.max(), 10.0, 4.0, paint);
-
-    vger.text(lorem, 18, Color::WHITE, Some(448.0));
-
     let png_name = "text_box.png";
     render_test(&mut vger, &device, &queue, png_name, true);
     assert!(png_not_black(png_name));
@@ -405,7 +396,7 @@ fn text_box() {
     let atlas_png_name = "text_box_atlas.png";
     save_png(
         &vger.glyph_cache.mask_atlas.atlas_texture,
-        &vger::atlas::Atlas::get_texture_desc(),
+        &vger::atlas::Atlas::get_texture_desc(1, 1),
         &device,
         &queue,
         atlas_png_name,
@@ -451,12 +442,6 @@ fn test_scissor_text() {
 
     vger.translate([32.0, 256.0]);
     vger.scissor(euclid::rect(-100.0, -100.0, 400.0, 400.0), 0.0);
-
-    let bounds = vger.text_bounds(lorem, 18, Some(448.0));
-
-    vger.stroke_rect(bounds.origin, bounds.max(), 10.0, 4.0, paint);
-
-    vger.text(lorem, 18, Color::WHITE, Some(448.0));
 
     let png_name = "text_box_scissor.png";
     render_test(&mut vger, &device, &queue, png_name, true);

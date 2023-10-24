@@ -510,10 +510,14 @@ struct VertexOutput {
 
     /// Point transformed by current transform.
     @location(2) p: vec2<f32>,
+
+    /// Screen size.
+    @location(3) size: vec2<f32>,
 };
 
 struct Uniforms {
     size: vec2<f32>,
+    atlas_size: vec2<f32>,
 };
 
 @group(1)
@@ -557,6 +561,7 @@ fn vs_main(
 
     out.p = (xforms.xforms[prim.xform] * vec4<f32>(q, 0.0, 1.0)).xy;
     out.position = vec4<f32>((2.0 * out.p / uniforms.size - 1.0) * vec2<f32>(1.0, -1.0), 0.0, 1.0);
+    out.size = uniforms.atlas_size;
 
     return out;
 }
@@ -627,19 +632,20 @@ fn scissor_mask(scissor: Scissor, p: vec2<f32>) -> f32 {
 
 @group(1)
 @binding(1)
-var glyph_atlas: texture_2d<f32>;
-
-@group(1)
-@binding(2)
-var color_atlas: texture_2d<f32>;
-
-@group(1)
-@binding(3)
 var samp : sampler;
 
 @group(1)
-@binding(4)
+@binding(2)
 var color_samp : sampler;
+
+@group(2)
+@binding(0)
+var glyph_atlas: texture_2d<f32>;
+
+@group(2)
+@binding(1)
+var color_atlas: texture_2d<f32>;
+
 
 // sRGB to linear conversion for one channel.
 fn toLinear(s: f32) -> f32
@@ -684,13 +690,13 @@ fn fs_main(
     // Look up glyph alpha (if not a glyph, still have to because of wgsl).
     // let a = textureSample(glyph_atlas, samp, (in.t+0.5)/1024.0).r;
     // let mask = textureLoad(glyph_atlas, vec2<i32>(in.t), 0);
-    let mask = textureSample(glyph_atlas, samp, in.t/4096.0);
-    let color_mask = textureSample(color_atlas, color_samp, in.t/4096.0);
+    let mask = textureSample(glyph_atlas, samp, in.t/in.size);
+    let color_mask = textureSample(color_atlas, color_samp, in.t/in.size);
 
     // Look up image color (if no active image, still have to because of wgsl).
     // Note that we could use a separate shader if that's a perf hit.
     let t = unpack_mat3x2(paint.xform) * vec3<f32>(in.t, 1.0);
-    var color = textureSample(tex, samp, t);
+    var color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
 
     let s = scissor_mask(scissor, in.p);
     

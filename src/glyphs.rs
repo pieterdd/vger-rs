@@ -30,12 +30,10 @@ pub struct Image {
 }
 
 pub struct GlyphCache {
+    pub size: u32,
     pub mask_atlas: Atlas,
     pub color_atlas: Atlas,
-    pub image_atlas: Atlas,
-    pub font: fontdue::Font,
-    info: HashMap<(char, u32), GlyphInfo>,
-    atlas_infos: HashMap<
+    glyph_infos: HashMap<
         (
             cosmic_text::fontdb::ID,
             u16,
@@ -50,18 +48,12 @@ pub struct GlyphCache {
 
 impl GlyphCache {
     pub fn new(device: &wgpu::Device) -> Self {
-        let mut settings = fontdue::FontSettings::default();
-        settings.collection_index = 0;
-        settings.scale = 100.0;
-        let font = include_bytes!("fonts/Anodina-Regular.ttf") as &[u8];
-
+        let size = 1024;
         Self {
-            mask_atlas: Atlas::new(device, AtlasContent::Mask),
-            color_atlas: Atlas::new(device, AtlasContent::Color),
-            image_atlas: Atlas::new(device, AtlasContent::Color),
-            font: fontdue::Font::from_bytes(font, settings).unwrap(),
-            info: HashMap::new(),
-            atlas_infos: HashMap::new(),
+            size,
+            mask_atlas: Atlas::new(device, AtlasContent::Mask, size, size),
+            color_atlas: Atlas::new(device, AtlasContent::Color, size, size),
+            glyph_infos: HashMap::new(),
             img_infos: HashMap::new(),
             svg_infos: HashMap::new(),
         }
@@ -120,7 +112,7 @@ impl GlyphCache {
         info
     }
 
-    pub fn get_glyph_mask<'a>(
+    pub fn get_glyph_mask(
         &mut self,
         font_id: cosmic_text::fontdb::ID,
         glyph_id: u16,
@@ -129,7 +121,7 @@ impl GlyphCache {
         image: impl FnOnce() -> SwashImage,
     ) -> AtlasInfo {
         let key = (font_id, glyph_id, size, subpx);
-        if let Some(rect) = self.atlas_infos.get(&key) {
+        if let Some(rect) = self.glyph_infos.get(&key) {
             return *rect;
         }
 
@@ -152,65 +144,37 @@ impl GlyphCache {
             top: image.placement.top,
             colored: image.content != SwashContent::Mask,
         };
-        self.atlas_infos.insert(key, info);
+        self.glyph_infos.insert(key, info);
         info
-    }
-
-    pub fn get_glyph(&mut self, c: char, size: f32) -> GlyphInfo {
-        let factor = 65536.0;
-
-        // Convert size to fixed point so we can hash it.
-        let size_fixed_point = (size * factor) as u32;
-
-        // Do we already have a glyph?
-        match self.info.get(&(c, size_fixed_point)) {
-            Some(info) => *info,
-            None => {
-                let (metrics, data) = self.font.rasterize(c, size_fixed_point as f32 / factor);
-
-                /*
-                let mut i = 0;
-                for _ in 0..metrics.height {
-                    for _ in 0..metrics.width {
-                        print!("{} ", if data[i] != 0 { '*' } else { ' ' });
-                        i += 1;
-                    }
-                    print!("\n");
-                }
-                */
-
-                let rect =
-                    self.mask_atlas
-                        .add_region(&data, metrics.width as u32, metrics.height as u32);
-
-                let info = GlyphInfo { rect, metrics };
-
-                self.info.insert((c, size_fixed_point), info);
-                info
-            }
-        }
     }
 
     pub fn update(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
         self.mask_atlas.update(device, encoder);
         self.color_atlas.update(device, encoder);
-        self.image_atlas.update(device, encoder);
     }
 
-    pub fn check_usage(&mut self) {
-        if self.mask_atlas.usage() > 0.7
-            || self.color_atlas.usage() > 0.7
-            || self.image_atlas.usage() > 0.7
-        {
+    pub fn check_usage(&mut self, device: &wgpu::Device) -> bool {
+        let max_seen = (self.mask_atlas.max_seen as f32 * 2.0)
+            .max(self.color_atlas.max_seen as f32 * 2.0) as u32;
+        if max_seen > self.size {
+            self.size = max_seen;
+            self.mask_atlas.resize(device, self.size, self.size);
+            self.color_atlas.resize(device, self.size, self.size);
             self.clear();
+            true
+        } else if self.mask_atlas.usage() > 0.7 || self.color_atlas.usage() > 0.7 {
+            self.clear();
+            false
+        } else {
+            false
         }
     }
 
     pub fn clear(&mut self) {
-        self.info.clear();
         self.mask_atlas.clear();
         self.color_atlas.clear();
-        self.image_atlas.clear();
-        self.atlas_infos.clear();
+        self.glyph_infos.clear();
+        self.svg_infos.clear();
+        self.img_infos.clear();
     }
 }
