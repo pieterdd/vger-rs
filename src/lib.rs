@@ -1,4 +1,4 @@
-use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
+use cosmic_text::{SubpixelBin, SwashImage};
 use std::sync::Arc;
 
 mod path;
@@ -25,7 +25,9 @@ pub use color::Color;
 pub mod atlas;
 
 mod glyphs;
+
 use glyphs::GlyphCache;
+pub use glyphs::{Image, PixelFormat};
 
 use wgpu::util::DeviceExt;
 
@@ -33,6 +35,7 @@ use wgpu::util::DeviceExt;
 #[derive(Copy, Clone, Debug)]
 struct Uniforms {
     size: [f32; 2],
+    atlas_size: [f32; 2],
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -58,6 +61,8 @@ pub(crate) struct Scissor {
     pub xform: WorldToLocal,
     pub origin: [f32; 2],
     pub size: [f32; 2],
+    pub radius: f32,
+    pad: f32,
 }
 
 impl Scissor {
@@ -66,6 +71,8 @@ impl Scissor {
             xform: WorldToLocal::identity(),
             origin: [-10000.0, -10000.0],
             size: [20000.0, 20000.0],
+            radius: 0.0,
+            pad: 0.0,
         }
     }
 }
@@ -76,6 +83,7 @@ pub struct Vger {
     scenes: [Scene; 3],
     cur_scene: usize,
     cur_layer: usize,
+    cur_z_index: i32,
     tx_stack: Vec<LocalToWorld>,
     scissor_stack: Vec<Scissor>,
     device_px_ratio: f32,
@@ -89,11 +97,10 @@ pub struct Vger {
     path_scanner: PathScanner,
     pen: LocalPoint,
     pub glyph_cache: GlyphCache,
-    layout: Layout,
     images: Vec<Option<wgpu::Texture>>,
     image_bind_groups: Vec<Option<wgpu::BindGroup>>,
-    image_bind_group_layout: wgpu::BindGroupLayout,
-    default_image_bind_group: wgpu::BindGroup,
+    cache_bind_group_layout: wgpu::BindGroupLayout,
+    cache_bind_group: wgpu::BindGroup,
 }
 
 impl Vger {
@@ -132,11 +139,7 @@ impl Vger {
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
@@ -149,24 +152,34 @@ impl Vger {
                 label: Some("uniform_bind_group_layout"),
             });
 
-        let image_bind_group_layout =
+        let cache_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
                 label: Some("image_bind_group_layout"),
             });
 
         let glyph_cache = GlyphCache::new(&device);
-
-        let texture_view = glyph_cache.create_view();
 
         let uniforms = GPUVec::new_uniforms(&device, "uniforms");
 
@@ -174,6 +187,15 @@ impl Vger {
             label: Some("glyph"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let color_glyph_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("color_glyph"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -183,31 +205,25 @@ impl Vger {
                 uniforms.bind_group_entry(0),
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                    resource: wgpu::BindingResource::Sampler(&glyph_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&glyph_sampler),
+                    resource: wgpu::BindingResource::Sampler(&color_glyph_sampler),
                 },
             ],
             label: Some("vger bind group"),
         });
 
-        let default_image_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &image_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&texture_view),
-            }],
-            label: Some("vger default image bind group"),
-        });
+        let cache_bind_group =
+            Self::get_cache_bind_group(&device, &glyph_cache, &cache_bind_group_layout);
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[
                 &Scene::bind_group_layout(&device),
                 &uniform_bind_group_layout,
-                &image_bind_group_layout,
+                &cache_bind_group_layout,
             ],
             push_constant_ranges: &[],
         });
@@ -248,14 +264,13 @@ impl Vger {
             multiview: None,
         });
 
-        let layout = Layout::new(CoordinateSystem::PositiveYUp);
-
         Self {
             device,
             queue,
             scenes,
             cur_scene: 0,
             cur_layer: 0,
+            cur_z_index: 0,
             tx_stack: vec![],
             scissor_stack: vec![],
             device_px_ratio: 1.0,
@@ -269,12 +284,37 @@ impl Vger {
             path_scanner: PathScanner::new(),
             pen: LocalPoint::zero(),
             glyph_cache,
-            layout,
             images: vec![],
             image_bind_groups: vec![],
-            image_bind_group_layout,
-            default_image_bind_group,
+            cache_bind_group_layout,
+            cache_bind_group,
         }
+    }
+
+    fn get_cache_bind_group(
+        device: &wgpu::Device,
+        glyph_cache: &GlyphCache,
+        bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> wgpu::BindGroup {
+        let mask_texture_view = glyph_cache.mask_atlas.create_view();
+        let color_texture_view = glyph_cache.color_atlas.create_view();
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&mask_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&color_texture_view),
+                },
+            ],
+            label: Some("vger cache bind group"),
+        });
+
+        bind_group
     }
 
     /// Begin rendering.
@@ -282,10 +322,6 @@ impl Vger {
         self.device_px_ratio = device_px_ratio;
         self.cur_layer = 0;
         self.screen_size = ScreenSize::new(window_width, window_height);
-        self.uniforms.clear();
-        self.uniforms.push(Uniforms {
-            size: [window_width, window_height],
-        });
         self.cur_scene = (self.cur_scene + 1) % 3;
         self.scenes[self.cur_scene].clear();
         self.tx_stack.clear();
@@ -294,8 +330,25 @@ impl Vger {
         self.scissor_stack.push(Scissor::new());
         self.paint_count = 0;
         self.xform_count = 0;
+        self.add_xform();
         self.scissor_count = 0;
         self.pen = LocalPoint::zero();
+
+        // If we're getting close to full, reset the glyph cache.
+        if self.glyph_cache.check_usage(&self.device) {
+            // if resized, we need to get new bind group
+            self.cache_bind_group = Self::get_cache_bind_group(
+                &self.device,
+                &self.glyph_cache,
+                &self.cache_bind_group_layout,
+            )
+        }
+
+        self.uniforms.clear();
+        self.uniforms.push(Uniforms {
+            size: [window_width, window_height],
+            atlas_size: [self.glyph_cache.size as f32, self.glyph_cache.size as f32],
+        });
     }
 
     /// Saves rendering state (transform and scissor rect).
@@ -336,7 +389,7 @@ impl Vger {
             );
 
             rpass.set_bind_group(1, &self.uniform_bind_group, &[]);
-            rpass.set_bind_group(2, &self.default_image_bind_group, &[]);
+            rpass.set_bind_group(2, &self.cache_bind_group, &[]);
 
             let scene = &self.scenes[self.cur_scene];
             let n = scene.prims[self.cur_layer].len();
@@ -381,18 +434,14 @@ impl Vger {
             }
         }
         queue.submit(Some(encoder.finish()));
-
-        // If we're getting close to full, reset the glyph cache.
-        let usage = self.glyph_cache.usage();
-        // println!("glyph cache usage {}", usage);
-        if usage > 0.7 {
-            // println!("clearing glyph cache");
-            self.glyph_cache.clear();
-        }
     }
 
     fn render(&mut self, prim: Prim) {
-        self.scenes[self.cur_scene].prims[self.cur_layer].push(prim);
+        let prims = self.scenes[self.cur_scene]
+            .depthed_prims
+            .entry(self.cur_z_index)
+            .or_default();
+        prims.push(prim);
     }
 
     /// Fills a circle.
@@ -411,7 +460,6 @@ impl Vger {
         prim.paint = paint_index.index as u32;
         prim.quad_bounds = [c.x - radius, c.y - radius, c.x + radius, c.y + radius];
         prim.tex_bounds = prim.quad_bounds;
-        prim.xform = self.add_xform() as u32;
         prim.scissor = self.add_scissor() as u32;
 
         self.render(prim);
@@ -448,7 +496,6 @@ impl Vger {
             c.y + radius + width,
         ];
         prim.tex_bounds = prim.quad_bounds;
-        prim.xform = self.add_xform() as u32;
         prim.scissor = self.add_scissor() as u32;
 
         self.render(prim);
@@ -460,6 +507,7 @@ impl Vger {
         rect: Rect,
         radius: f32,
         paint_index: PaintIndex,
+        blur_radius: f32,
     ) {
         let mut prim = Prim::default();
         prim.prim_type = PrimType::Rect as u32;
@@ -470,11 +518,16 @@ impl Vger {
         prim.cvs[1] = min.y;
         prim.cvs[2] = max.x;
         prim.cvs[3] = max.y;
+        prim.cvs[4] = blur_radius;
         prim.radius = radius;
         prim.paint = paint_index.index as u32;
-        prim.quad_bounds = [min.x, min.y, max.x, max.y];
+        prim.quad_bounds = [
+            min.x - blur_radius * 3.0,
+            min.y - blur_radius * 3.0,
+            max.x + blur_radius * 3.0,
+            max.y + blur_radius * 3.0,
+        ];
         prim.tex_bounds = prim.quad_bounds;
-        prim.xform = self.add_xform() as u32;
         prim.scissor = self.add_scissor() as u32;
 
         self.render(prim);
@@ -500,7 +553,6 @@ impl Vger {
         prim.paint = paint_index.index as u32;
         prim.quad_bounds = [min.x - width, min.y - width, max.x + width, max.y + width];
         prim.tex_bounds = prim.quad_bounds;
-        prim.xform = self.add_xform() as u32;
         prim.scissor = self.add_scissor() as u32;
 
         self.render(prim);
@@ -525,13 +577,12 @@ impl Vger {
         prim.width = width;
         prim.paint = paint_index.index as u32;
         prim.quad_bounds = [
-            ap.x.min(bp.x) - width / 2.0,
-            ap.y.min(bp.y) - width / 2.0,
-            ap.x.max(bp.x) + width / 2.0,
-            ap.y.max(bp.y) + width / 2.0,
+            ap.x.min(bp.x) - width * 2.0,
+            ap.y.min(bp.y) - width * 2.0,
+            ap.x.max(bp.x) + width * 2.0,
+            ap.y.max(bp.y) + width * 2.0,
         ];
         prim.tex_bounds = prim.quad_bounds;
-        prim.xform = self.add_xform() as u32;
         prim.scissor = self.add_scissor() as u32;
 
         self.render(prim);
@@ -566,7 +617,6 @@ impl Vger {
             ap.y.max(bp.y).max(cp.y) + width,
         ];
         prim.tex_bounds = prim.quad_bounds;
-        prim.xform = self.add_xform() as u32;
         prim.scissor = self.add_scissor() as u32;
 
         self.render(prim);
@@ -592,7 +642,6 @@ impl Vger {
 
     /// Fills a path.
     pub fn fill(&mut self, paint_index: PaintIndex) {
-        let xform = self.add_xform();
         let scissor = self.add_scissor();
 
         self.path_scanner.init();
@@ -601,7 +650,6 @@ impl Vger {
             let mut prim = Prim::default();
             prim.prim_type = PrimType::PathFill as u32;
             prim.paint = paint_index.index as u32;
-            prim.xform = xform as u32;
             prim.scissor = scissor as u32;
             prim.start = self.scenes[self.cur_scene].cvs.len() as u32;
 
@@ -632,159 +680,114 @@ impl Vger {
             self.render(prim);
         }
 
-        self.path_scanner.segments.clear()
+        self.path_scanner.segments.clear();
     }
 
-    fn setup_layout(&mut self, text: &str, size: u32, max_width: Option<f32>) {
-        let scale = self.device_px_ratio;
+    pub fn render_glyph(
+        &mut self,
+        x: f32,
+        y: f32,
+        font_id: cosmic_text::fontdb::ID,
+        glyph_id: u16,
+        size: u32,
+        subpx: (SubpixelBin, SubpixelBin),
+        image: impl FnOnce() -> SwashImage,
+        paint_index: PaintIndex,
+    ) {
+        let info = self
+            .glyph_cache
+            .get_glyph_mask(font_id, glyph_id, size, subpx, image);
+        if let Some(rect) = info.rect {
+            let mut prim = Prim::default();
+            prim.prim_type = if info.colored {
+                PrimType::ColorGlyph
+            } else {
+                PrimType::Glyph
+            } as u32;
 
-        self.layout.reset(&LayoutSettings {
-            max_width: max_width.map(|w| w * scale),
-            ..LayoutSettings::default()
-        });
+            let x = x + info.left as f32;
+            let y = y - info.top as f32;
+            prim.quad_bounds = [x, y, x + rect.width as f32, y + rect.height as f32];
 
-        let scaled_size = size as f32 * scale;
+            prim.tex_bounds = [
+                rect.x as f32,
+                rect.y as f32,
+                (rect.x + rect.width) as f32,
+                (rect.y + rect.height) as f32,
+            ];
+            prim.paint = paint_index.index as u32;
+            prim.scissor = self.add_scissor() as u32;
 
-        self.layout.append(
-            &[&self.glyph_cache.font],
-            &TextStyle::new(text, scaled_size, 0),
-        );
-    }
-
-    /// Renders text.
-    pub fn text(&mut self, text: &str, size: u32, color: Color, max_width: Option<f32>) {
-        self.setup_layout(text, size, max_width);
-
-        let scale = self.device_px_ratio;
-        let scaled_size = size as f32 * scale;
-
-        let paint = self.color_paint(color);
-        let xform = self.add_xform() as u32;
-        let scissor = self.add_scissor() as u32;
-
-        let mut prims = vec![];
-        for (i, glyph) in self.layout.glyphs().iter().enumerate() {
-            let c = text.chars().nth(i).unwrap();
-            // println!("glyph {:?}", c);
-            let info = self.glyph_cache.get_glyph(c, scaled_size);
-
-            if let Some(rect) = info.rect {
-                let mut prim = Prim::default();
-                prim.prim_type = PrimType::Glyph as u32;
-                prim.xform = xform;
-                prim.scissor = scissor;
-                assert!(glyph.width == rect.width as usize);
-                assert!(glyph.height == rect.height as usize);
-
-                prim.quad_bounds = [
-                    glyph.x / scale,
-                    glyph.y / scale,
-                    (glyph.x + glyph.width as f32) / scale,
-                    (glyph.y + glyph.height as f32) / scale,
-                ];
-                // println!("quad_bounds: {:?}", prim.quad_bounds);
-
-                prim.tex_bounds = [
-                    rect.x as f32,
-                    (rect.y + rect.height) as f32,
-                    (rect.x + rect.width) as f32,
-                    rect.y as f32,
-                ];
-                prim.paint = paint.index as u32;
-                // println!("tex_bounds: {:?}", prim.tex_bounds);
-
-                prims.push(prim);
-            }
-        }
-
-        for prim in prims {
             self.render(prim);
         }
     }
 
-    /// Calculates the bounds for text.
-    pub fn text_bounds(&mut self, text: &str, size: u32, max_width: Option<f32>) -> LocalRect {
-        self.setup_layout(text, size, max_width);
+    pub fn render_image(
+        &mut self,
+        x: f32,
+        y: f32,
+        hash: &[u8],
+        width: u32,
+        height: u32,
+        image_fn: impl FnOnce() -> Image,
+    ) {
+        let info = self.glyph_cache.get_image_mask(hash, image_fn);
+        if let Some(rect) = info.rect {
+            let mut prim = Prim::default();
+            prim.prim_type = PrimType::ColorGlyph as u32;
 
-        let mut min = LocalPoint::new(f32::MAX, f32::MAX);
-        let mut max = LocalPoint::new(f32::MIN, f32::MIN);
+            let x = x + info.left as f32;
+            let y = y - info.top as f32;
+            prim.quad_bounds = [x, y, x + width as f32, y + height as f32];
 
-        let scale = self.device_px_ratio;
+            prim.tex_bounds = [
+                rect.x as f32,
+                rect.y as f32,
+                (rect.x + rect.width) as f32,
+                (rect.y + rect.height) as f32,
+            ];
+            prim.scissor = self.add_scissor() as u32;
 
-        for glyph in self.layout.glyphs() {
-            min = min.min([glyph.x / scale, glyph.y / scale].into());
-            max = max.max(
-                [
-                    (glyph.x + glyph.width as f32) / scale,
-                    (glyph.y + glyph.height as f32) / scale,
-                ]
-                .into(),
-            );
+            self.render(prim);
         }
-
-        LocalRect::new(min, (max - min).into())
     }
 
-    /// Returns local coordinates of glyphs.
-    pub fn glyph_positions(
+    pub fn render_svg(
         &mut self,
-        text: &str,
-        size: u32,
-        max_width: Option<f32>,
-    ) -> Vec<LocalRect> {
-        let mut rects = vec![];
-        rects.reserve(text.len());
+        x: f32,
+        y: f32,
+        hash: &[u8],
+        width: u32,
+        height: u32,
+        image: impl FnOnce() -> Vec<u8>,
+        paint_index: Option<PaintIndex>,
+    ) {
+        let info = self.glyph_cache.get_svg_mask(hash, width, height, image);
+        if let Some(rect) = info.rect {
+            let mut prim = Prim::default();
+            prim.prim_type = if paint_index.is_some() {
+                PrimType::OverrideColorSvg
+            } else {
+                PrimType::ColorGlyph
+            } as u32;
 
-        self.setup_layout(text, size, max_width);
+            let x = x + info.left as f32;
+            let y = y - info.top as f32;
+            prim.quad_bounds = [x, y, x + rect.width as f32, y + rect.height as f32];
 
-        let s = 1.0 / self.device_px_ratio;
-
-        for glyph in self.layout.glyphs() {
-            rects.push(
-                LocalRect::new(
-                    [glyph.x, glyph.y].into(),
-                    [glyph.width as f32, glyph.height as f32].into(),
-                )
-                .scale(s, s),
-            )
-        }
-
-        rects
-    }
-
-    pub fn line_metrics(
-        &mut self,
-        text: &str,
-        size: u32,
-        max_width: Option<f32>,
-    ) -> Vec<LineMetrics> {
-        self.setup_layout(text, size, max_width);
-        let s = 1.0 / self.device_px_ratio;
-
-        let mut rects = vec![];
-        rects.reserve(text.len());
-
-        let glyphs = self.layout.glyphs();
-
-        if let Some(lines) = self.layout.lines() {
-            for line in lines {
-                let mut rect = LocalRect::zero();
-
-                for glyph in &glyphs[line.glyph_start..line.glyph_end] {
-                    rect = rect.union(&LocalRect::new(
-                        [glyph.x, glyph.y].into(),
-                        [glyph.width as f32, glyph.height as f32].into(),
-                    ));
-                }
-                rects.push(LineMetrics {
-                    glyph_start: line.glyph_start,
-                    glyph_end: line.glyph_end,
-                    bounds: rect.scale(s, s),
-                });
+            prim.tex_bounds = [
+                rect.x as f32,
+                rect.y as f32,
+                (rect.x + rect.width) as f32,
+                (rect.y + rect.height) as f32,
+            ];
+            if let Some(paint_index) = paint_index {
+                prim.paint = paint_index.index as u32;
             }
-        }
+            prim.scissor = self.add_scissor() as u32;
 
-        rects
+            self.render(prim);
+        }
     }
 
     fn add_xform(&mut self) -> usize {
@@ -833,19 +836,24 @@ impl Vger {
         }
     }
 
+    pub fn set_z_index(&mut self, z_index: i32) {
+        self.cur_z_index = z_index;
+    }
+
     /// Gets the current transform.
     pub fn current_transform(&self) -> LocalToWorld {
         *self.tx_stack.last().unwrap()
     }
 
     /// Sets the current scissor rect.
-    pub fn scissor(&mut self, rect: LocalRect) {
+    pub fn scissor(&mut self, rect: LocalRect, radius: f32) {
         if let Some(m) = self.scissor_stack.last_mut() {
             *m = Scissor::new();
             if let Some(xform) = self.tx_stack.last().unwrap().inverse() {
                 m.xform = xform;
                 m.origin = rect.origin.to_array();
                 m.size = rect.size.to_array();
+                m.radius = radius;
             }
         }
     }
@@ -962,7 +970,7 @@ impl Vger {
         self.images.push(Some(texture));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.image_bind_group_layout,
+            layout: &self.cache_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::TextureView(&texture_view),
@@ -978,5 +986,51 @@ impl Vger {
     pub fn delete_image(&mut self, image: ImageIndex) {
         self.images[image.index] = None;
         self.image_bind_groups[image.index] = None;
+    }
+}
+
+#[derive(Hash, Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum SubpixelOffset {
+    Zero = 0,
+    Quarter = 1,
+    Half = 2,
+    ThreeQuarters = 3,
+}
+
+impl Default for SubpixelOffset {
+    fn default() -> Self {
+        SubpixelOffset::Zero
+    }
+}
+
+impl SubpixelOffset {
+    // Skia quantizes subpixel offsets into 1/4 increments.
+    // Given the absolute position, return the quantized increment
+    pub fn quantize(pos: f32) -> Self {
+        // Following the conventions of Gecko and Skia, we want
+        // to quantize the subpixel position, such that abs(pos) gives:
+        // [0.0, 0.125) -> Zero
+        // [0.125, 0.375) -> Quarter
+        // [0.375, 0.625) -> Half
+        // [0.625, 0.875) -> ThreeQuarters,
+        // [0.875, 1.0) -> Zero
+        // The unit tests below check for this.
+        let apos = ((pos - pos.floor()) * 8.0) as i32;
+        match apos {
+            1..=2 => SubpixelOffset::Quarter,
+            3..=4 => SubpixelOffset::Half,
+            5..=6 => SubpixelOffset::ThreeQuarters,
+            _ => SubpixelOffset::Zero,
+        }
+    }
+
+    pub fn to_f32(self) -> f32 {
+        match self {
+            SubpixelOffset::Zero => 0.0,
+            SubpixelOffset::Quarter => 0.25,
+            SubpixelOffset::Half => 0.5,
+            SubpixelOffset::ThreeQuarters => 0.75,
+        }
     }
 }

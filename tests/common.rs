@@ -1,6 +1,7 @@
 use futures::executor::block_on;
 use std::fs::File;
 use vger::*;
+use wgpu::StoreOp;
 
 pub async fn setup() -> (wgpu::Device, wgpu::Queue) {
     let instance_desc = wgpu::InstanceDescriptor::default();

@@ -28,8 +28,14 @@ pub enum PrimType {
     /// Text rendering.
     Glyph,
 
+    /// Colored glyph e.g. emoji.
+    ColorGlyph,
+
     /// Path fills.
     PathFill,
+
+    /// Svg with override color
+    OverrideColorSvg,
 }
 
 #[derive(Copy, Clone, Default)]
