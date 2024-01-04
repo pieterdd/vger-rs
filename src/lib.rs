@@ -83,6 +83,7 @@ pub struct Vger {
     scenes: [Scene; 3],
     cur_scene: usize,
     cur_layer: usize,
+    cur_z_index: i32,
     tx_stack: Vec<LocalToWorld>,
     scissor_stack: Vec<Scissor>,
     device_px_ratio: f32,
@@ -178,8 +179,8 @@ impl Vger {
                 label: Some("image_bind_group_layout"),
             });
 
-
         let glyph_cache = GlyphCache::new(&device);
+
         let uniforms = GPUVec::new_uniforms(&device, "uniforms");
 
         let glyph_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -269,6 +270,7 @@ impl Vger {
             scenes,
             cur_scene: 0,
             cur_layer: 0,
+            cur_z_index: 0,
             tx_stack: vec![],
             scissor_stack: vec![],
             device_px_ratio: 1.0,
@@ -832,6 +834,10 @@ impl Vger {
         if let Some(m) = self.tx_stack.last_mut() {
             *m = m.pre_rotate(euclid::Angle::<f32>::radians(theta));
         }
+    }
+
+    pub fn set_z_index(&mut self, z_index: i32) {
+        self.cur_z_index = z_index;
     }
 
     /// Gets the current transform.
