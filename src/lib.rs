@@ -1,4 +1,4 @@
-use cosmic_text::{SubpixelBin, SwashImage};
+use floem_cosmic_text::{SubpixelBin, SwashImage};
 use std::sync::Arc;
 
 mod path;
@@ -687,7 +687,7 @@ impl Vger {
         &mut self,
         x: f32,
         y: f32,
-        font_id: cosmic_text::fontdb::ID,
+        font_id: floem_cosmic_text::fontdb::ID,
         glyph_id: u16,
         size: u32,
         subpx: (SubpixelBin, SubpixelBin),
